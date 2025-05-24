@@ -1,0 +1,108 @@
+# grafana.yaml
+# Kubernetes manifest for the Grafana Deployment, Service, PersistentVolume, and PersistentVolumeClaim
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-deployment
+  labels:
+    app: grafana # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      app: grafana # Selector to match pods with this label
+  template:
+    metadata:
+      labels:
+        app: grafana # Label for the Pods created by this Deployment
+    spec:
+      containers:
+        - name: grafana # Container name
+          image: grafana/grafana:main-ubuntu # Grafana Docker image
+          imagePullPolicy: IfNotPresent # Pull if not already present (good for stable images)
+          ports:
+            - containerPort: 3000 # The internal port Grafana listens on
+          env:
+            # Admin credentials (MUST match your desired admin user/password)
+            # For production, use Kubernetes Secrets!
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin # Your desired admin username
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: password # Your desired admin password (INSECURE IN YAML - USE SECRETS)
+            # Optional: Configure data path if different from default /var/lib/grafana
+            # - name: GF_PATHS_DATA
+            #   value: /path/to/your/data
+          volumeMounts:
+            - mountPath: /var/lib/grafana # Mount path inside the container
+              name: grafana-storage # Name of the volume mount
+          resources:
+            # Define resource requests and limits (adjust based on expected load)
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+      volumes:
+        - name: grafana-storage # Volume name referenced in volumeMounts
+          persistentVolumeClaim:
+            claimName: grafana-pvc # Claim the PVC named grafana-pvc
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana # The name of the Service - use this name for internal cluster access
+  labels:
+    app: grafana # Label for the Service
+spec:
+  selector:
+    app: grafana # Selects pods with this label (the Grafana Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 3000 # The port the Service will be accessible on *within* the cluster
+      targetPort: 3000 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# To access Grafana from outside the cluster (e.g., browser),
+# you would typically use kubectl port-forward or an Ingress controller.
+# Example port-forward: kubectl port-forward svc/grafana 3000:3000
+
+---
+
+# PersistentVolume for Grafana Data (using hostPath for kind)
+# WARNING: hostPath is NOT suitable for production or multi-node clusters!
+# Data is tied to a specific node. Use dedicated storage solutions for production.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: grafana-pv # Name of the PersistentVolume
+spec:
+  # storageClassName: 'standard' # Optional: If you have a default storage class in kind, you can use it.
+  # If not, remove this or use a specific one.
+  accessModes:
+    - ReadWriteOnce # Can be mounted as read-write by a single node
+  capacity:
+    storage: 5Gi # Request 5 Gibibytes of storage (adjust as needed)
+  hostPath:
+    # Path on the filesystem of the Kubernetes node (the kind container)
+    # Ensure this directory exists and has appropriate permissions for the Grafana container user
+    path: /var/lib/grafana_data # Using an absolute path is generally better
+
+---
+
+# PersistentVolumeClaim for Grafana Data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc # Name of the PersistentVolumeClaim (referenced by the Deployment)
+spec:
+  # storageClassName: 'standard' # Optional: Must match the PV's storageClassName if used.
+  # If PV has no storageClassName, remove this.
+  accessModes:
+    - ReadWriteOnce # Must match the PV's accessModes
+  resources:
+    requests:
+      storage: 5Gi # Request 5 Gibibytes of storage (must match PV capacity or be less)

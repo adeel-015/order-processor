@@ -1,0 +1,135 @@
+# order-service.yaml
+# Kubernetes manifest for the Order Service Deployment and Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service-deployment
+  labels:
+    app: order-service # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      app: order-service # Selector to match pods with this label
+  template:
+    metadata:
+      labels:
+        app: order-service # Label for the Pods created by this Deployment
+    spec:
+      containers:
+        - name: order-service # Container name
+          image: adeel3511/order-service:latest # Your Docker image
+          imagePullPolicy: Always # Always pull the latest image (useful during development)
+          ports:
+            - containerPort: 8080 # The internal port the Spring Boot app listens on (from application-docker.properties)
+          env:
+            # Activate the 'docker' Spring profile
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+
+            # Database Connection Environment Variables (referencing postgres-order Service name)
+            # These map to spring.datasource.url, spring.datasource.username, spring.datasource.password
+            - name: SPRING_DATASOURCE_URL
+              # Corrected: Use port 5432 to match what PostgreSQL is listening on
+              value: jdbc:postgresql://postgres-order:5432/order-service # Use the Kubernetes Service name and CORRECTED port
+            - name: SPRING_DATASOURCE_USERNAME
+              value: adeel # Matches your docker-compose and postgres-order yaml
+            # Database Password (Use Kubernetes Secrets for production!)
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: password # Matches your docker-compose and postgres-order yaml (INSECURE IN YAML - USE SECRETS)
+
+            # Eureka Server URL (referencing discovery-server Service name)
+            # This maps to eureka.client.service-url.defaultZone
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: http://eureka:password@discovery-server:8761/eureka/ # Use the Kubernetes Service name and credentials
+
+            # Inventory Service URL (referencing inventory-service Service name)
+            # Assuming your Order Service uses a Feign Client or WebClient with service discovery
+            # or directly calls the Kubernetes Service name.
+            # This might map to a property like inventory-service.url or similar in your app config
+            - name: INVENTORY_SERVICE_URL # Example: Adjust name to match your app's config property
+              value: http://inventory-service:8080 # Use the Kubernetes Service name and port
+
+            # Notification Service URL (referencing notification-service Service name)
+            # Assuming your Order Service uses a Feign Client or WebClient with service discovery
+            # or directly calls the Kubernetes Service name.
+            # This might map to a property like notification-service.url or similar
+            - name: NOTIFICATION_SERVICE_URL # Example: Adjust name to match your app's config property
+              value: http://notification-service:8080 # Use the Kubernetes Service name and port
+
+            # Kafka Bootstrap Servers (referencing kafka-broker Service name and internal port)
+            # This maps to spring.kafka.bootstrap-servers
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: kafka-broker:29092 # Use the Kubernetes Service name and internal port
+
+            # Schema Registry URL (referencing schema-registry Service name)
+            # This maps to spring.kafka.properties.schema.registry.url
+            - name: SPRING_KAFKA_PROPERTIES_SCHEMA_REGISTRY_URL
+              value: http://schema-registry:8081 # Use the Kubernetes Service name and port
+
+            # Keycloak Issuer URI (referencing keycloak Service name)
+            # Assuming Order Service is a resource server validating JWTs
+            # This maps to spring.security.oauth2.resourceserver.jwt.issuer-uri
+            - name: SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI
+              value: http://keycloak:8080/realms/spring-boot-microservices-realm # Use the Kubernetes Service name and Keycloak realm path
+
+            # Zipkin Endpoint (referencing zipkin Service name)
+            # This maps to management.zipkin.tracing.endpoint
+            - name: MANAGEMENT_ZIPKIN_TRACING_ENDPOINT
+              value: http://zipkin:9411/api/v2/spans # Use the Kubernetes Service name and port
+
+            # Adjusted Logging Levels for debugging
+            - name: LOGGING_LEVEL_ROOT
+              value: INFO # Set root logging level to INFO
+            - name: LOGGING_LEVEL_COM_ADEELMP_ORDER_SERVICE # Your application package
+              value: DEBUG # Keep your application logs at DEBUG
+            - name: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK
+              value: INFO # Reduce general Spring framework logs to INFO
+            - name: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_JDBC
+              value: DEBUG # Keep JDBC logs at DEBUG for database connection issues
+            - name: LOGGING_LEVEL_ORG_HIBERNATE
+              value: DEBUG # Keep Hibernate logs at DEBUG for ORM issues
+            - name: LOGGING_LEVEL_ORG_POSTGRESQL
+              value: DEBUG # Keep PostgreSQL driver logs at DEBUG
+
+          resources:
+            # Define resource requests and limits (adjust based on expected load)
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+          # Readiness probe is highly recommended to ensure the app is ready before receiving traffic
+          # readinessProbe:
+          #   httpGet:
+          #     path: /actuator/health/readiness # Or /health depending on your Spring Boot Actuator config
+          #     port: 8080
+          #   initialDelaySeconds: 20 # Give time for DB/Eureka/Kafka/other dependencies to be ready
+          #   periodSeconds: 10
+      # restartPolicy: Always # Default is Always
+
+# Note: Kubernetes does not have a direct equivalent to docker-compose depends_on for application startup order.
+# Your Spring Boot application should handle connection retries to its dependencies (databases, Eureka, Kafka, other services)
+# during startup and runtime.
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service # The name of the Service - used by other microservices (like API Gateway) to connect
+  labels:
+    app: order-service # Label for the Service
+spec:
+  selector:
+    app: order-service # Selects pods with this label (the Order Service Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 8080 # The port the Service will be accessible on *within* the cluster
+      targetPort: 8080 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# If other services need to call this service, they will use the hostname 'order-service' and port 8080.

@@ -1,0 +1,94 @@
+# inventory-service.yaml
+# Kubernetes manifest for the Inventory Service Deployment and Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service-deployment
+  labels:
+    app: inventory-service # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      app: inventory-service # Selector to match pods with this label
+  template:
+    metadata:
+      labels:
+        app: inventory-service # Label for the Pods created by this Deployment
+    spec:
+      containers:
+        - name: inventory-service # Container name
+          image: adeel3511/inventory-service:latest # Your Docker image
+          imagePullPolicy: Always # Always pull the latest image (useful during development)
+          ports:
+            - containerPort: 8080 # The internal port the Spring Boot app listens on (from application-docker.properties)
+          env:
+            # Activate the 'docker' Spring profile
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+
+            # Database Connection Environment Variables (referencing postgres-inventory Service name)
+            # These map to spring.datasource.url, spring.datasource.username, spring.datasource.password
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://postgres-inventory:5432/inventory-service # Use the Kubernetes Service name and port
+            - name: SPRING_DATASOURCE_USERNAME
+              value: adeel # Matches your docker-compose and postgres-inventory yaml
+            # Database Password (Use Kubernetes Secrets for production!)
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: password # Matches your docker-compose and postgres-inventory yaml (INSECURE IN YAML - USE SECRETS)
+
+            # Eureka Server URL (referencing discovery-server Service name)
+            # This maps to eureka.client.service-url.defaultZone
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: http://eureka:password@discovery-server:8761/eureka/ # Use the Kubernetes Service name and credentials
+
+            # Zipkin Endpoint (referencing zipkin Service name)
+            # This maps to management.zipkin.tracing.endpoint
+            - name: MANAGEMENT_ZIPKIN_TRACING_ENDPOINT
+              value: http://zipkin:9411/api/v2/spans # Use the Kubernetes Service name and port
+
+            # Optional: Add other environment variables if needed (e.g., logging levels)
+            # - name: LOGGING_LEVEL_ROOT
+            #   value: DEBUG
+
+          resources:
+            # Define resource requests and limits (adjust based on expected load)
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+          # Readiness probe is highly recommended to ensure the app is ready before receiving traffic
+          # readinessProbe:
+          #   httpGet:
+          #     path: /actuator/health/readiness # Or /health depending on your Spring Boot Actuator config
+          #     port: 8080
+          #   initialDelaySeconds: 15 # Give time for DB/Eureka connection
+          #   periodSeconds: 10
+      # restartPolicy: Always # Default is Always
+
+# Note: Kubernetes does not have a direct equivalent to docker-compose depends_on for application startup order.
+# Your Spring Boot application should handle connection retries to its dependencies (database, Eureka, etc.)
+# during startup and runtime.
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-service # The name of the Service - used by other microservices (like Order Service) to connect
+  labels:
+    app: inventory-service # Label for the Service
+spec:
+  selector:
+    app: inventory-service # Selects pods with this label (the Inventory Service Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 8080 # The port the Service will be accessible on *within* the cluster
+      targetPort: 8080 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# If other services need to call this service, they will use the hostname 'inventory-service' and port 8080.

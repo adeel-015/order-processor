@@ -1,0 +1,113 @@
+# postgres-order.yaml
+# Kubernetes manifest for the postgres-order Deployment, Service, PersistentVolume, and PersistentVolumeClaim
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-order-deployment
+  labels:
+    app: postgres-order # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica for the database
+  selector:
+    matchLabels:
+      app: postgres-order # Selector to match pods
+  template:
+    metadata:
+      labels:
+        app: postgres-order # Label for the Pods
+    spec:
+      containers:
+        - name: postgres-order # Container name
+          image: postgres:13.21-alpine3.20 # PostgreSQL Docker image
+          imagePullPolicy: IfNotPresent # Pull if not already present
+          ports:
+            - containerPort: 5432 # The internal port PostgreSQL listens on
+          env:
+            # Database Credentials and Name (Use Kubernetes Secrets for production!)
+            - name: POSTGRES_DB
+              value: order-service # Matches your docker-compose
+            - name: POSTGRES_USER
+              value: adeel # Matches your docker-compose
+            - name: POSTGRES_PASSWORD
+              value: password # Matches your docker-compose (INSECURE IN YAML - USE SECRETS)
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata # Standard PGDATA path for official images
+
+          volumeMounts:
+            # Mount path for PostgreSQL data (Matches the default or PGDATA env var)
+            - mountPath: /var/lib/postgresql/data/pgdata # Standard PostgreSQL data path for official images
+              name: postgres-order-storage # Name of the volume mount
+          resources:
+            # Increased resource requests and limits
+            requests:
+              memory: "768Mi" # Increased memory request
+              cpu: "500m" # Increased CPU request
+            limits:
+              memory: "2Gi" # Increased memory limit
+              cpu: "1000m" # Increased CPU limit (1 full core)
+      volumes:
+        - name: postgres-order-storage # Volume name referenced in volumeMounts
+          persistentVolumeClaim:
+            claimName: postgres-order-pvc # Claim the PVC named postgres-order-pvc
+
+# ... other resources like Service, PV, PVC for postgres-order would be below this ...
+
+---
+
+# --- postgres-order Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-order # The name of the Service - used by microservices (like order-service) to connect
+  labels:
+    app: postgres-order # Label for the Service
+spec:
+  selector:
+    app: postgres-order # Selects pods with this label (the Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 5432 # The port the Service will be accessible on *within* the cluster (matching container port)
+      targetPort: 5432 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# To access the database from outside the cluster (e.g., for a client tool),
+# you would typically use kubectl port-forward.
+# Example port-forward: kubectl port-forward svc/postgres-order 5432:5432
+
+---
+
+# --- postgres-order PersistentVolume ---
+# WARNING: hostPath is NOT suitable for production or multi-node clusters!
+# Data is tied to a specific node. Use dedicated storage solutions for production.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-order-pv # PV name
+spec:
+  # storageClassName: 'standard' # Optional: Use if you have a default storage class in kind.
+  # If not, remove this or use a specific one.
+  accessModes:
+    - ReadWriteOnce # Can be mounted as read-write by a single node
+  capacity:
+    storage: 5Gi # Storage size for data (adjust as needed)
+  hostPath:
+    # Path on the filesystem of the Kubernetes node (the kind container)
+    # Ensure this directory exists and has appropriate permissions for the Postgres container user
+    path: /var/lib/postgres_order_data # Using an absolute path is generally better
+
+---
+
+# --- postgres-order PersistentVolumeClaim ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-order-pvc # PVC name (claimed by Deployment)
+spec:
+  # storageClassName: 'standard' # Optional: Must match the PV's storageClassName if used.
+  # If PV has no storageClassName, remove this.
+  accessModes:
+    - ReadWriteOnce # Must match the PV's accessModes
+  resources:
+    requests:
+      storage: 5Gi # Request storage (must match PV capacity or be less)

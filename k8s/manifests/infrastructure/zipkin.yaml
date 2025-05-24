@@ -1,0 +1,63 @@
+# zipkin.yaml
+# Kubernetes manifest for the Zipkin Deployment and Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zipkin-deployment
+  labels:
+    app: zipkin # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica for Zipkin
+  selector:
+    matchLabels:
+      app: zipkin # Selector to match pods
+  template:
+    metadata:
+      labels:
+        app: zipkin # Label for the Pods
+    spec:
+      containers:
+        - name: zipkin # Container name
+          image: openzipkin/zipkin # Zipkin Docker image
+          imagePullPolicy: IfNotPresent # Pull if not already present
+          ports:
+            - containerPort: 9411 # The internal port Zipkin listens on
+          # Optional: Add environment variables for Zipkin configuration (e.g., storage backend)
+          # env:
+          #   - name: STORAGE_TYPE
+          #     value: elasticsearch # Example: Use Elasticsearch for persistent storage
+          resources:
+            # Define resource requests and limits (adjust based on expected tracing volume)
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+      # restartPolicy: Always # Default is Always
+
+# Note: By default, Zipkin stores traces in memory. For persistent storage
+# in production, you would configure a different STORAGE_TYPE (e.g., elasticsearch, cassandra)
+# and deploy the corresponding database infrastructure and configure Zipkin to use it.
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: zipkin # The name of the Service - used by microservices for tracing endpoint
+  labels:
+    app: zipkin # Label for the Service
+spec:
+  selector:
+    app: zipkin # Selects pods with this label (the Zipkin Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 9411 # The port the Service will be accessible on *within* the cluster
+      targetPort: 9411 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# To access Zipkin UI from outside the cluster (e.g., browser),
+# you would typically use kubectl port-forward.
+# Example port-forward: kubectl port-forward svc/zipkin 9411:9411

@@ -1,0 +1,105 @@
+# product-service.yaml
+# Kubernetes manifest for the Product Service Deployment and Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service-deployment
+  labels:
+    app: product-service # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      app: product-service # Selector to match pods with this label
+  template:
+    metadata:
+      labels:
+        app: product-service # Label for the Pods created by this Deployment
+    spec:
+      containers:
+        - name: product-service # Container name
+          image: adeel3511/product-service:latest # Your Docker image
+          imagePullPolicy: Always # Always pull the latest image (useful during development)
+          ports:
+            - containerPort: 8080 # The internal port the Spring Boot app listens on (from application-docker.properties)
+          env:
+            # Activate the 'docker' Spring profile
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+
+            # MongoDB Connection Environment Variables (referencing mongo Service name)
+            # This maps to spring.data.mongodb.uri
+            - name: SPRING_DATA_MONGODB_URI
+              value: mongodb://mongo:27017/product-service # Use the Kubernetes Service name and port
+
+            # Eureka Server URL (referencing discovery-server Service name)
+            # This maps to eureka.client.service-url.defaultZone
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: http://eureka:password@discovery-server:8761/eureka/ # Use the Kubernetes Service name and credentials
+
+            # Kafka Bootstrap Servers (referencing kafka-broker Service name and internal port)
+            # This maps to spring.kafka.bootstrap-servers
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: kafka-broker:29092 # Use the Kubernetes Service name and internal port
+
+            # Schema Registry URL (referencing schema-registry Service name)
+            # This maps to spring.kafka.properties.schema.registry.url
+            - name: SPRING_KKA_PROPERTIES_SCHEMA_REGISTRY_URL # Note the typo here, should be SPRING_KAFKA_PROPERTIES_SCHEMA_REGISTRY_URL
+              value: http://schema-registry:8081 # Use the Kubernetes Service name and port
+
+            # Keycloak Issuer URI (referencing keycloak Service name)
+            # Assuming Product Service is a resource server validating JWTs
+            # This maps to spring.security.oauth2.resourceserver.jwt.issuer-uri
+            - name: SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI
+              value: http://keycloak:8080/realms/spring-boot-microservices-realm # Use the Kubernetes Service name and Keycloak realm path
+
+            # Zipkin Endpoint (referencing zipkin Service name)
+            # This maps to management.zipkin.tracing.endpoint
+            - name: MANAGEMENT_ZIPKIN_TRACING_ENDPOINT
+              value: http://zipkin:9411/api/v2/spans # Use the Kubernetes Service name and port
+
+            # Optional: Add other environment variables if needed (e.g., logging levels)
+            # - name: LOGGING_LEVEL_ROOT
+            #   value: DEBUG
+
+          resources:
+            # Define resource requests and limits (adjust based on expected load)
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+          # Readiness probe is highly recommended to ensure the app is ready before receiving traffic
+          # readinessProbe:
+          #   httpGet:
+          #     path: /actuator/health/readiness # Or /health depending on your Spring Boot Actuator config
+          #     port: 8080
+          #   initialDelaySeconds: 20 # Give time for DB/Eureka/Kafka/other dependencies to be ready
+          #   periodSeconds: 10
+      # restartPolicy: Always # Default is Always
+
+# Note: Kubernetes does not have a direct equivalent to docker-compose depends_on for application startup order.
+# Your Spring Boot application should handle connection retries to its dependencies (databases, Eureka, Kafka, other services)
+# during startup and runtime.
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service # The name of the Service - used by other microservices (like API Gateway) to connect
+  labels:
+    app: product-service # Label for the Service
+spec:
+  selector:
+    app: product-service # Selects pods with this label (the Product Service Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 8080 # The port the Service will be accessible on *within* the cluster
+      targetPort: 8080 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# If other services need to call this service, they will use the hostname 'product-service' and port 8080.

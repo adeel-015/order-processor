@@ -1,0 +1,75 @@
+# discovery-server.yaml
+# Kubernetes manifest for the Discovery Server (Eureka) Deployment and Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discovery-server-deployment
+  labels:
+    app: discovery-server # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica for the Discovery Server
+  selector:
+    matchLabels:
+      app: discovery-server # Selector to match pods with this label
+  template:
+    metadata:
+      labels:
+        app: discovery-server # Label for the Pods created by this Deployment
+    spec:
+      containers:
+        - name: discovery-server # Container name
+          image: adeel3511/discovery-server:latest # Your Docker image
+          imagePullPolicy: Always # Always pull the latest image
+          ports:
+            - containerPort: 8761 # The internal port Eureka listens on
+          env:
+            # Activate the 'docker' Spring profile
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+            # Pass Eureka credentials as environment variables (matching application-docker.properties)
+            # These should match spring.security.user.name and spring.security.user.password in your Discovery Server config
+            - name: SPRING_SECURITY_USER_NAME # This exact name maps to spring.security.user.name
+              value: eureka
+            - name: SPRING_SECURITY_USER_PASSWORD # This exact name maps to spring.security.user.password
+              value: "{noop}password"
+            # Pass Zipkin endpoint (using service name)
+            - name: MANAGEMENT_ZIPKIN_TRACING_ENDPOINT
+              value: http://zipkin:9411/api/v2/spans # Assuming zipkin service is named 'zipkin' on port 9411
+          resources:
+            # Define resource requests and limits
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          # Readiness probe is highly recommended for Eureka to ensure it's ready before receiving traffic
+          # readinessProbe:
+          #   httpGet:
+          #     path: /actuator/health/readiness # Or /health depending on your Spring Boot Actuator config
+          #     port: 8761
+          #   initialDelaySeconds: 10
+          #   periodSeconds: 5
+      # restartPolicy: Always # Default is Always
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: discovery-server # The name of the Service - THIS MUST MATCH THE HOSTNAME USED BY CLIENTS (e.g., api-gateway)
+  labels:
+    app: discovery-server # Label for the Service
+spec:
+  selector:
+    app: discovery-server # Selects pods with this label (the Discovery Server Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 8761 # The port the Service will be accessible on *within* the cluster
+      targetPort: 8761 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# To access the Eureka dashboard from outside the cluster (e.g., browser),
+# you would typically use kubectl port-forward or an Ingress controller.
+# Example port-forward: kubectl port-forward svc/discovery-server 8761:8761

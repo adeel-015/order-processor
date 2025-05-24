@@ -1,0 +1,309 @@
+# kafka-infrastructure.yaml
+# Kubernetes manifests for Zookeeper, Kafka Broker, and Schema Registry
+
+# --- Zookeeper Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zookeeper-deployment
+  labels:
+    app: zookeeper # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica for Zookeeper (simple setup)
+  selector:
+    matchLabels:
+      app: zookeeper # Selector to match pods
+  template:
+    metadata:
+      labels:
+        app: zookeeper # Label for the Pods
+    spec:
+      containers:
+        - name: zookeeper # Container name
+          image: confluentinc/cp-zookeeper:7.5.0 # Zookeeper image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 2181 # Zookeeper client port
+          env:
+            # Zookeeper Configuration
+            - name: ZOOKEEPER_CLIENT_PORT
+              value: "2181"
+            - name: ZOOKEEPER_TICK_TIME
+              value: "2000"
+            # For a single-node Zookeeper, no additional cluster config is needed.
+            # For multi-node, you'd need ZOOKEEPER_SERVER_ID, ZOOKEEPER_SERVERS, etc.
+          volumeMounts:
+            # Mount path for Zookeeper data
+            - mountPath: /var/lib/zookeeper/data
+              name: zookeeper-data # Volume mount name
+          resources:
+            # Define resource requests and limits (adjust based on usage)
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+      volumes:
+        - name: zookeeper-data # Volume name referenced in volumeMounts
+          persistentVolumeClaim:
+            claimName: zookeeper-pvc # Claim the PVC named zookeeper-pvc
+
+---
+
+# --- Zookeeper Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper # Service name - used by Kafka to connect
+  labels:
+    app: zookeeper # Label for the Service
+spec:
+  selector:
+    app: zookeeper # Selects Zookeeper pods
+  ports:
+    - protocol: TCP
+      port: 2181 # Service port
+      targetPort: 2181 # Container port
+  type: ClusterIP # Internal cluster IP
+
+---
+
+# --- Zookeeper PersistentVolume ---
+# WARNING: hostPath is NOT suitable for production or multi-node clusters!
+# Data is tied to a specific node. Use dedicated storage solutions for production.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: zookeeper-pv # PV name
+spec:
+  # storageClassName: 'standard' # Optional: Use if you have a default storage class
+  accessModes:
+    - ReadWriteOnce # Can be mounted by a single node
+  capacity:
+    storage: 1Gi # Storage size for Zookeeper data (adjust as needed)
+  hostPath:
+    # Path on the filesystem of the Kubernetes node (the kind container)
+    # Ensure this directory exists and has appropriate permissions
+    path: /var/lib/zookeeper_data # Absolute path on the KIND node
+
+---
+
+# --- Zookeeper PersistentVolumeClaim ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zookeeper-pvc # PVC name (claimed by Deployment)
+spec:
+  # storageClassName: 'standard' # Optional: Must match PV if used
+  accessModes:
+    - ReadWriteOnce # Must match PV
+  resources:
+    requests:
+      storage: 1Gi # Request storage (must match PV capacity or be less)
+
+---
+
+# --- Kafka Broker Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-broker-deployment
+  labels:
+    app: kafka-broker # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica for Kafka (simple setup)
+  selector:
+    matchLabels:
+      app: kafka-broker # Selector to match pods
+  template:
+    metadata:
+      labels:
+        app: kafka-broker # Label for the Pods
+    spec:
+      containers:
+        - name: kafka-broker # Container name
+          image: confluentinc/cp-kafka:7.5.0 # Kafka image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9092 # Client port (PLAINTEXT)
+            - containerPort: 29092 # Internal port (PLAINTEXT_INTERNAL)
+          env:
+            # Kafka Broker Configuration
+            - name: KAFKA_BROKER_ID
+              value: "1" # Unique ID for the broker (important for multi-broker)
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: zookeeper:2181 # Connect to Zookeeper Service by name
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+            # Advertised Listeners: How clients connect.
+            # PLAINTEXT://<Service Name>:<Service Port> for internal cluster access
+            # PLAINTEXT_INTERNAL://<Pod IP>:<Internal Port> for inter-broker communication (more complex for multi-broker)
+            # For a single broker, internal and external might be the same.
+            # Using the Service name and port for PLAINTEXT access from other microservices.
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://kafka-broker:9092,PLAINTEXT_INTERNAL://kafka-broker:29092 # Use Service name for simplicity in single broker
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1" # Set to 1 for single broker
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1" # Set to 1 for single broker
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1" # Set to 1 for single broker
+            # Add other Kafka configs if needed (e.g., auto topic creation)
+            # - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+            #   value: "true"
+          volumeMounts:
+            # Mount path for Kafka data
+            - mountPath: /var/lib/kafka/data
+              name: kafka-data # Volume mount name
+          resources:
+            # Define resource requests and limits (Kafka can be memory/CPU intensive)
+            requests:
+              memory: "256Mi" # Keep this at a reasonable value
+              cpu: "500m"
+            limits:
+              memory: "2Gi" # Adjust based on expected load and data size
+              cpu: "1000m" # 1 CPU core
+      volumes:
+        - name: kafka-data # Volume name referenced in volumeMounts
+          persistentVolumeClaim:
+            claimName: kafka-broker-pvc # Claim the PVC named kafka-broker-pvc
+
+---
+
+# --- Kafka Broker Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-broker # Service name - used by microservices to connect
+  labels:
+    app: kafka-broker # Label for the Service
+spec:
+  selector:
+    app: kafka-broker # Selects Kafka Broker pods
+  ports:
+    - name: plaintext # Name for the PLAINTEXT port
+      protocol: TCP
+      port: 9092 # Service port for clients
+      targetPort: 9092 # Container port for clients
+    # Optional: Add a port for internal communication if needed by other brokers (less relevant for single replica)
+    - name: plaintext-internal
+      protocol: TCP
+      port: 29092
+      targetPort: 29092
+  type: ClusterIP # Internal cluster IP
+
+# For multi-broker setups, a Headless Service is often used for stable network identities.
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: kafka-broker-headless
+# spec:
+#   clusterIP: None # Makes it a headless service
+#   selector:
+#     app: kafka-broker
+#   ports:
+#     - name: plaintext
+#       port: 9092
+#       targetPort: 9092
+#     - name: plaintext-internal
+#       port: 29092
+#       targetPort: 29092
+
+---
+
+# --- Kafka Broker PersistentVolume ---
+# WARNING: hostPath is NOT suitable for production or multi-node clusters!
+# Data is tied to a specific node. Use dedicated storage solutions for production.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kafka-broker-pv # PV name - ADDED
+spec:
+  # storageClassName: 'standard' # Optional: Use if you have a default storage class
+  accessModes:
+    - ReadWriteOnce # Can be mounted by a single node
+  capacity:
+    storage: 5Gi # Storage size for Kafka data (adjust as needed) - ADDED
+  hostPath:
+    # Path on the filesystem of the Kubernetes node (the kind container)
+    # Ensure this directory exists and has appropriate permissions
+    path: /var/lib/kafka_data # Absolute path on the KIND node - ADDED
+
+---
+
+# --- Kafka Broker PersistentVolumeClaim ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-broker-pvc # PVC name (claimed by Deployment) - ADDED
+spec:
+  # storageClassName: 'standard' # Optional: Must match PV if used
+  accessModes:
+    - ReadWriteOnce # Must match PV - ADDED
+  resources:
+    requests:
+      storage: 5Gi # Request storage (must match PV capacity or be less) - ADDED
+
+---
+
+# --- Schema Registry Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schema-registry-deployment
+  labels:
+    app: schema-registry # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      app: schema-registry # Selector to match pods
+  template:
+    metadata:
+      labels:
+        app: schema-registry # Label for the Pods
+    spec:
+      containers:
+        - name: schema-registry # Container name
+          image: confluentinc/cp-schema-registry:7.5.0 # Schema Registry image
+          imagePullPolicy: IfNotPresent
+          # Re-added temporary debug command as requested
+          command: ["sh", "-c", "env && sleep 300"] # Print env vars and sleep for 5 minutes
+          ports:
+            - containerPort: 8081 # Schema Registry default port
+          env:
+            # Schema Registry Configuration
+            - name: SCHEMA_REGISTRY_HOST_NAME
+              value: schema-registry # Schema Registry Service name
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: kafka-broker:29092 # Connect to Kafka Broker Service (internal port)
+            # Add other Schema Registry configs if needed
+            - name: SCHEMA_REGISTRY_LISTENERS
+              value: http://0.0.0.0:8081 # Listen on all interfaces
+          resources:
+            # Define resource requests and limits (adjust based on usage)
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+
+---
+
+# --- Schema Registry Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: schema-registry # Service name - used by Kafka UI or clients
+  labels:
+    app: schema-registry # Label for the Service
+spec:
+  selector:
+    app: schema-registry # Selects Schema Registry pods
+  ports:
+    - protocol: TCP
+      port: 8081 # Service port
+      targetPort: 8081 # Container port
+  type: ClusterIP # Internal cluster IP

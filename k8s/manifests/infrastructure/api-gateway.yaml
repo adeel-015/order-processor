@@ -1,0 +1,145 @@
+# api-gateway.yaml
+# Kubernetes manifest for the API Gateway Deployment and Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway-deployment
+  labels:
+    app: api-gateway # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      app: api-gateway # Selector to match pods with this label
+  template:
+    metadata:
+      labels:
+        app: api-gateway # Label for the Pods created by this Deployment
+    spec:
+      containers:
+        - name: api-gateway # Container name
+          image: adeel3511/api-gateway:latest # Your Docker image
+          imagePullPolicy: Always # Always pull the latest image (useful during development)
+          ports:
+            - containerPort: 8080 # The internal port the Spring Boot app listens on
+          env:
+            # Activate the 'docker' Spring profile
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+
+            # Eureka Server URL (referencing discovery-server Service name)
+            # This is still needed for the API Gateway to register itself with Eureka
+            # and potentially discover other services if not all routing is direct to K8s Services.
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: http://eureka:password@discovery-server:8761/eureka/ # Use the Kubernetes Service name and credentials
+
+            # Keycloak Issuer URI (referencing keycloak Service name)
+            # This maps to spring.security.oauth2.resourceserver.jwt.issuer-uri
+            - name: SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI
+              value: http://keycloak:8080/realms/spring-boot-microservices-realm # Use the Kubernetes Service name and Keycloak realm path
+
+            # Zipkin Endpoint (referencing zipkin Service name)
+            # This maps to management.zipkin.tracing.endpoint
+            - name: MANAGEMENT_ZIPKIN_TRACING_ENDPOINT
+              value: http://zipkin:9411/api/v2/spans # Use the Kubernetes Service name and port
+
+            # Define routes directly in application.yaml or via ConfigMap
+            # Example environment variables for routes (less common, but possible)
+            # The preferred way is often through application.yaml/ConfigMap mounted as a volume.
+            # If using application.yaml/ConfigMap, ensure these env vars don't override those routes.
+
+            # Example route configuration via environment variables (if not using application.yaml/ConfigMap)
+            # This assumes your Spring Cloud Gateway is configured to read routes from environment.
+            # A ConfigMap with application.yaml is generally cleaner for routes.
+
+            # Example: Route for Order Service - CORRECTED URI
+            # This routes directly to the Kubernetes Service 'order-service' on port 8080
+            # This bypasses the Eureka Load Balancer for this specific route, relying on K8s Service discovery.
+            # If using application.yaml in a ConfigMap, define the route there instead.
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_0_ID
+            #   value: order-service
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_0_URI
+            #   value: http://order-service:8080 # Route directly to K8s Service
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_0_PREDICATES_0
+            #   value: Path=/api/order
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_0_PREDICATES_1
+            #   value: Method=POST
+
+            # Example: Route for Inventory Service
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_1_ID
+            #   value: inventory-service
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_1_URI
+            #   value: lb://inventory-service # Can still use lb:// if desired, but direct K8s Service is often better
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_1_PREDICATES_0
+            #   value: Path=/api/inventory/**
+
+            # Example: Route for Product Service
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_2_ID
+            #   value: product-service
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_2_URI
+            #   value: lb://product-service # Can still use lb:// if desired
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_2_PREDICATES_0
+            #   value: Path=/api/product/**
+
+            # Example: Route for Keycloak (if needed)
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_3_ID
+            #   value: keycloak
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_3_URI
+            #   value: http://keycloak:8080 # Route directly to K8s Service
+            # - name: SPRING_CLOUD_GATEWAY_ROUTES_3_PREDICATES_0
+            #   value: Path=/realms/**
+
+            # Logging levels (adjust as needed for debugging)
+            # - name: LOGGING_LEVEL_ROOT
+            #   value: INFO
+            # - name: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY
+            #   value: DEBUG
+            # - name: LOGGING_LEVEL_REACTOR_NETTY
+            #   value: DEBUG # Useful for network debugging
+
+          resources:
+            # Define resource requests and limits (adjust based on expected load)
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+          # Readiness probe is highly recommended to ensure the API Gateway is ready before receiving traffic
+          # readinessProbe:
+          #   httpGet:
+          #     path: /actuator/health/readiness # Or /health
+          #     port: 8080
+          #   initialDelaySeconds: 20 # Give time for Eureka registration and route loading
+          #   periodSeconds: 10
+      # restartPolicy: Always # Default is Always
+
+# Note: Kubernetes does not have a direct equivalent to docker-compose depends_on for application startup order.
+# Your API Gateway should handle connection retries to its dependencies (Eureka, other services).
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway # The name of the Service - accessible from outside the cluster (if using NodePort/LoadBalancer)
+  labels:
+    app: api-gateway # Label for the Service
+spec:
+  selector:
+    app: api-gateway # Selects pods with this label (the API Gateway Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 8181 # The external port for the API Gateway (what you access from your browser/Postman)
+      targetPort: 8080 # The internal containerPort the API Gateway listens on
+  type: LoadBalancer # Or NodePort or ClusterIP + Ingress depending on your cluster setup
+    # For kind, LoadBalancer might not provision a public IP unless you use a tool like MetalLB.
+  # NodePort is often simpler for local testing: type: NodePort, nodePort: <choose a port like 30000-32767>
+
+# To access the API Gateway from outside the cluster:
+# If type is LoadBalancer: Use the External IP (kubectl get svc api-gateway)
+# If type is NodePort: Use <Node IP>:<NodePort>
+# If type is ClusterIP: Use kubectl port-forward svc/api-gateway 8181:8080 or configure an Ingress.
+

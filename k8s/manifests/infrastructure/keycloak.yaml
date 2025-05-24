@@ -1,0 +1,102 @@
+# keycloak.yaml
+# Kubernetes manifest for the Keycloak Application Deployment and Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-deployment
+  labels:
+    app: keycloak # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica for Keycloak (simple setup)
+  selector:
+    matchLabels:
+      app: keycloak # Selector to match pods with this label
+  template:
+    metadata:
+      labels:
+        app: keycloak # Label for the Pods created by this Deployment
+    spec:
+      containers:
+        - name: keycloak # Container name
+          image: quay.io/keycloak/keycloak:26.2.3 # Keycloak Docker image
+          imagePullPolicy: IfNotPresent # Pull if not already present
+          command: ["/opt/keycloak/bin/kc.sh", "start-dev", "--import-realm"] # Command to run Keycloak
+          ports:
+            - containerPort: 8080 # The internal port Keycloak listens on
+          env:
+            # Database Connection Environment Variables (referencing keycloak-mysql Service name)
+            - name: DB_VENDOR
+              value: MYSQL
+            - name: DB_ADDR
+              value: keycloak-mysql # Use the Kubernetes Service name for keycloak-mysql
+            - name: DB_DATABASE
+              value: keycloak # Matches your docker-compose
+            - name: DB_USER
+              value: keycloak # Matches your docker-compose
+            # Database Password (Use Kubernetes Secrets for production!)
+            - name: DB_PASSWORD
+              value: password # Matches your docker-compose (INSECURE IN YAML - USE SECRETS)
+
+            # Admin Credentials (Use Kubernetes Secrets for production!)
+            - name: KEYCLOAK_ADMIN
+              value: admin # Your desired admin username
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              value: admin # Your desired admin password (INSECURE IN YAML - USE SECRETS)
+
+            # Optional: Set hostname for Keycloak if needed for internal/external URLs
+            # - name: KC_HOSTNAME
+            #   value: keycloak # Use the Service name for internal access
+            # - name: KC_HOSTNAME_PORT
+            #   value: "8080"
+
+          volumeMounts:
+            # Mount path for realm import (assuming a ConfigMap/Secret is mounted here)
+            # You need a corresponding Volume definition below that sources your realm file
+            - mountPath: /opt/keycloak/data/import/ # Mount path inside the container
+              name: realm-import-volume # Name of the volume mount
+              readOnly: true # Realm import files are usually read-only
+
+          resources:
+            # Define resource requests and limits (Keycloak can be memory intensive)
+            requests:
+              memory: "256Mi"
+              cpu: "500m"
+            limits:
+              memory: "1536Mi" # Adjust based on expected load and realm size
+              cpu: "1000m" # 1 CPU core
+
+      volumes:
+        # Define the volume for realm import
+        # This example uses a ConfigMap named 'keycloak-realm-config'
+        # You need to create this ConfigMap separately containing your realm.json file
+        - name: realm-import-volume # Volume name referenced in volumeMounts
+          configMap:
+            name: keycloak-realm-config # Name of the ConfigMap containing realm file(s)
+            # Optional: specify items if the ConfigMap has multiple files and you only need one
+            # items:
+            #   - key: your-realm-file.json # Key in the ConfigMap
+            #     path: your-realm-file.json # Path within the volume mount
+
+      # restartPolicy: Always # Default is Always
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak # The name of the Service - THIS MUST MATCH THE HOSTNAME USED BY CLIENTS (e.g., API Gateway)
+  labels:
+    app: keycloak # Label for the Service
+spec:
+  selector:
+    app: keycloak # Selects pods with this label (the Keycloak Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 8080 # The port the Service will be accessible on *within* the cluster
+      targetPort: 8080 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# To access Keycloak from outside the cluster (e.g., browser),
+# you would typically use kubectl port-forward or an Ingress controller.
+# Example port-forward: kubectl port-forward svc/keycloak 8080:8080

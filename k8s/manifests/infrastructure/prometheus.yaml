@@ -1,0 +1,112 @@
+# prometheus.yaml
+# Kubernetes manifest for the Prometheus Deployment, Service, PersistentVolume, and PersistentVolumeClaim
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-deployment
+  labels:
+    app: prometheus # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica for Prometheus
+  selector:
+    matchLabels:
+      app: prometheus # Selector to match pods
+  template:
+    metadata:
+      labels:
+        app: prometheus # Label for the Pods
+    spec:
+      containers:
+        - name: prometheus # Container name
+          image: prom/prometheus:main # Prometheus Docker image
+          imagePullPolicy: IfNotPresent # Pull if not already present
+          ports:
+            - containerPort: 9090 # The internal port Prometheus listens on
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml" # Specify config file location
+            - "--storage.tsdb.path=/prometheus" # Specify data storage path
+          volumeMounts:
+            # Mount path for the configuration file
+            - mountPath: /etc/prometheus/ # Mount directory inside the container
+              name: prometheus-config-volume # Name of the volume mount for config
+              readOnly: true # Config files are usually read-only
+            # Mount path for persistent data
+            - mountPath: /prometheus/ # Mount directory inside the container (matches --storage.tsdb.path)
+              name: prometheus-storage # Name of the volume mount for data
+          resources:
+            # Define resource requests and limits (adjust based on expected data volume and scrape frequency)
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi" # Adjust based on usage
+              cpu: "500m" # Adjust based on usage
+      volumes:
+        # Define the volume for the configuration file (sourced from a ConfigMap)
+        - name: prometheus-config-volume # Volume name referenced in volumeMounts
+          configMap:
+            name: prometheus-config # Name of the ConfigMap containing prometheus.yml
+        # Define the volume for persistent data (sourced from a PersistentVolumeClaim)
+        - name: prometheus-storage # Volume name referenced in volumeMounts
+          persistentVolumeClaim:
+            claimName: prometheus-pvc # Claim the PVC named prometheus-pvc
+
+---
+
+# --- Prometheus Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus # The name of the Service - used by Grafana to connect
+  labels:
+    app: prometheus # Label for the Service
+spec:
+  selector:
+    app: prometheus # Selects pods with this label (the Prometheus Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 9090 # The port the Service will be accessible on *within* the cluster
+      targetPort: 9090 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# To access Prometheus UI from outside the cluster (e.g., browser),
+# you would typically use kubectl port-forward.
+# Example port-forward: kubectl port-forward svc/prometheus 9090:9090
+
+---
+
+# --- Prometheus PersistentVolume ---
+# WARNING: hostPath is NOT suitable for production or multi-node clusters!
+# Data is tied to a specific node. Use dedicated storage solutions for production.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: prometheus-pv # PV name
+spec:
+  # storageClassName: 'standard' # Optional: Use if you have a default storage class in kind.
+  # If not, remove this or use a specific one.
+  accessModes:
+    - ReadWriteOnce # Can be mounted as read-write by a single node
+  capacity:
+    storage: 10Gi # Storage size for Prometheus data (adjust based on expected data volume)
+  hostPath:
+    # Path on the filesystem of the Kubernetes node (the kind container)
+    # Ensure this directory exists and has appropriate permissions for the Prometheus container user
+    path: /var/lib/prometheus_data # Using an absolute path is generally better
+
+---
+
+# --- Prometheus PersistentVolumeClaim ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc # PVC name (claimed by Deployment)
+spec:
+  # storageClassName: 'standard' # Optional: Must match the PV's storageClassName if used.
+  # If PV has no storageClassName, remove this.
+  accessModes:
+    - ReadWriteOnce # Must match the PV's accessModes
+  resources:
+    requests:
+      storage: 10Gi # Request storage (must match PV capacity or be less)

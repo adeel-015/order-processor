@@ -1,0 +1,102 @@
+# notification-service.yaml
+# Kubernetes manifest for the Notification Service Deployment and Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service-deployment
+  labels:
+    app: notification-service # Label for the Deployment
+spec:
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      app: notification-service # Selector to match pods with this label
+  template:
+    metadata:
+      labels:
+        app: notification-service # Label for the Pods created by this Deployment
+    spec:
+      containers:
+        - name: notification-service # Container name
+          image: adeel3511/notification-service:latest # Your Docker image
+          imagePullPolicy: Always # Always pull the latest image (useful during development)
+          ports:
+            - containerPort: 8080 # The internal port the Spring Boot app listens on (from application-docker.properties)
+          env:
+            # Activate the 'docker' Spring profile
+            - name: SPRING_PROFILES_ACTIVE
+              value: docker
+
+            # Kafka Bootstrap Servers (referencing kafka-broker Service name and internal port)
+            # This maps to spring.kafka.bootstrap-servers
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: kafka-broker:29092 # Use the Kubernetes Service name and internal port
+
+            # Schema Registry URL (referencing schema-registry Service name)
+            # This maps to spring.kafka.properties.schema.registry.url
+            - name: SPRING_KAFKA_PROPERTIES_SCHEMA_REGISTRY_URL
+              value: http://schema-registry:8081 # Use the Kubernetes Service name and port
+
+            # Eureka Server URL (referencing discovery-server Service name)
+            # This maps to eureka.client.service-url.defaultZone
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: http://eureka:password@discovery-server:8761/eureka/ # Use the Kubernetes Service name and credentials
+
+            # Zipkin Endpoint (referencing zipkin Service name)
+            # This maps to management.zipkin.tracing.endpoint
+            - name: MANAGEMENT_ZIPKIN_TRACING_ENDPOINT
+              value: http://zipkin:9411/api/v2/spans # Use the Kubernetes Service name and port
+
+            # Adjusted Logging Levels for debugging
+            - name: LOGGING_LEVEL_ROOT
+              value: INFO # Set root logging level to INFO
+            - name: LOGGING_LEVEL_COM_ADEELMP_NOTIFICATION_SERVICE # Your application package
+              value: DEBUG # Keep your application logs at DEBUG
+            - name: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK
+              value: INFO # Reduce general Spring framework logs to INFO
+            - name: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_KKA # Kafka framework logs
+              value: DEBUG # Keep Kafka framework logs at DEBUG
+            - name: LOGGING_LEVEL_ORG_APACHE_KKA # Apache Kafka client logs
+              value: DEBUG # Keep Apache Kafka client logs at DEBUG
+
+          resources:
+            # Define resource requests and limits (adjust based on expected load)
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+          # Readiness probe is highly recommended to ensure the app is ready before receiving traffic
+          # readinessProbe:
+          #   httpGet:
+          #     path: /actuator/health/readiness # Or /health depending on your Spring Boot Actuator config
+          #     port: 8080
+          #   initialDelaySeconds: 20 # Give time for Kafka/Eureka/other dependencies to be ready
+          #   periodSeconds: 10
+      # restartPolicy: Always # Default is Always
+
+# Note: Kubernetes does not have a direct equivalent to docker-compose depends_on for application startup order.
+# Your Spring Boot application should handle connection retries to its dependencies (Kafka, Eureka, other services)
+# during startup and runtime.
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service # The name of the Service - used by other microservices (like order-service) to connect
+  labels:
+    app: notification-service # Label for the Service
+spec:
+  selector:
+    app: notification-service # Selects pods with this label (the Notification Service Deployment pods)
+  ports:
+    - protocol: TCP
+      port: 8080 # The port the Service will be accessible on *within* the cluster
+      targetPort: 8080 # The containerPort on the pods that the Service targets
+  type: ClusterIP # Default Service type, exposes the service on a cluster-internal IP
+
+# If other services need to call this service, they will use the hostname 'notification-service' and port 8080.
